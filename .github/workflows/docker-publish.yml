@@ -20,6 +20,12 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
+    # Configurer les variables d'environnement
+    - name: Set repository variables
+      run: |
+        echo "REPO_OWNER=${{ github.repository_owner }}" >> $GITHUB_ENV
+        echo "REPO_NAME=$(basename ${{ github.repository }})" >> $GITHUB_ENV
+
     # Se connecter à GitHub Packages
     - name: Log in to GitHub Container Registry
       uses: docker/login-action@v2
@@ -31,14 +37,32 @@ jobs:
     # Construire l'image Docker
     - name: Build Docker image
       run: |
-        REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')
-        REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
-        docker build -t ghcr.io/${REPO_OWNER}/${REPO_NAME}:latest .
-        
+        TAG=$(date +%Y%m%d)-${{ github.sha }}
+        docker build -t ghcr.io/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}:latest \
+                     -t ghcr.io/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}:$TAG .
+
+    # Scanner l'image Docker pour détecter des vulnérabilités
+    - name: Reset Trivy database
+      run: |
+        trivy image --reset
+
+    - name: Run Trivy vulnerability scanner in repo mode
+      uses: aquasecurity/trivy-action@0.28.0
+      with:
+        scan-type: 'fs'
+        ignore-unfixed: true
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+        severity: 'CRITICAL'
+        update-db: true
+
+    - name: Upload Trivy scan results to GitHub Security tab
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: 'trivy-results.sarif'
 
     # Pousser l'image Docker sur GitHub Packages
     - name: Push Docker image
       run: |
-        REPO_OWNER=$(echo ${{ github.repository_owner }} | tr '[:upper:]' '[:lower:]')
-        REPO_NAME=$(echo ${{ github.repository }} | tr '[:upper:]' '[:lower:]')
-        docker push ghcr.io/${REPO_OWNER}/${REPO_NAME}:latest
+        docker push ghcr.io/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}:latest
+        docker push ghcr.io/${{ env.REPO_OWNER }}/${{ env.REPO_NAME }}:$TAG
